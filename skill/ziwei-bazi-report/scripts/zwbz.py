@@ -6,6 +6,7 @@
   zwbz lint  work/<编号>/facts.json work/<编号>/narrative.json             # 检查解读有没有说错
   zwbz render work/<编号>/facts.json work/<编号>/narrative.json             # 生成 report.html（先自动 lint）
   zwbz render ... --format md / --format chat                             # Markdown 完整版 / 聊天短摘要
+  zwbz lint-text work/<编号>/facts.json reply.txt [--date 2026-11-03]     # 检查要发给用户的聊天回复
   zwbz month work/<编号>/facts.json --date 2026-11-03                      # 某一天所在的流月、流年、大限
   zwbz match work/A/facts.json work/B/facts.json                           # 合盘（解读写好后 render-match，会先自动检查）
   zwbz hours --date 1990-05-20 --gender 女 --city 杭州 --around 14:55       # 出生时间不确定时对照相邻时辰
@@ -13,10 +14,11 @@
   zwbz selftest                                                           # 环境自检
 
 （zwbz 指 scripts/zwbz.sh 包装脚本，会优先用 install.sh 建的虚拟环境；也可以直接 python3 scripts/zwbz.py ...）
-退出码：run 0=可以继续，3=先问用户，4=停下；lint 1=有错误。
+退出码：run 0=可以继续，3=先问用户，4=停下；lint、lint-text 1=有错误。
 """
 import argparse
 import datetime as dt
+import glob
 import json
 import os
 import random
@@ -119,6 +121,28 @@ def cmd_lint(a):
     from zwbz.lint import lint, report
     findings = lint(_load(a.facts), _load(a.narrative))
     print(report(findings))
+    sys.exit(1 if any(f['level'] == 'error' for f in findings) else 0)
+
+
+def cmd_lint_text(a):
+    from zwbz.lint import lint_match, lint_text, report
+    data = _load(a.facts)
+    if a.text is not None:
+        text = a.text
+    elif a.file and a.file != '-':
+        try:
+            text = open(a.file, encoding='utf-8').read()
+        except FileNotFoundError:
+            sys.exit(f'找不到文件：{a.file}')
+    else:
+        text = sys.stdin.read()
+    if not text.strip():
+        sys.exit('没有要检查的文字')
+    if data.get('tool') == 'zwbz-match':
+        findings = lint_match(data, {'回复': text})
+    else:
+        findings = lint_text(data, text, a.date)
+    print(report(findings).replace('再生成报告', '再发给用户'))
     sys.exit(1 if any(f['level'] == 'error' for f in findings) else 0)
 
 
@@ -226,7 +250,13 @@ def cmd_purge(a):
             continue
         shutil.rmtree(t)
         removed.append(t)
-    print(f'已删除 {len(removed)} 个工作目录' + ('：' + '、'.join(removed) if removed else ''))
+        # 发文件时复制到 ../out/<编号>.* 的副本也一起删
+        name = os.path.basename(os.path.normpath(t))
+        out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(os.path.normpath(t)))), 'out')
+        for extra in sorted(glob.glob(os.path.join(glob.escape(out_dir), glob.escape(name) + '.*'))):
+            os.remove(extra)
+            removed.append(extra)
+    print(f'已删除 {len(removed)} 项' + ('：' + '、'.join(removed) if removed else ''))
 
 
 def cmd_selftest(a):
@@ -257,9 +287,10 @@ def cmd_selftest(a):
     ok_good = not [x for x in lint(f, good) if x['level'] == 'error']
     wrong = json.loads(json.dumps(good))
     wrong['summary'][0]['text'] = '生年太阴化忌，紫微在命宫，日主甲，2027 年戊申，火六局。'
+    wrong['summary'][1]['text'] = '2025 到 2035 年两边都指向压力大；生年天机自化权。'
     caught = len([x for x in lint(f, wrong) if x['level'] == 'error'])
-    print(f"解读检查自检：示例解读{'通过' if ok_good else '未通过'}，故意写错的 5 处抓到 {caught} 处")
-    sys.exit(1 if bad or not ok_good or caught < 5 else 0)
+    print(f"解读检查自检：示例解读{'通过' if ok_good else '未通过'}，故意写错的 7 处抓到 {caught} 处")
+    sys.exit(1 if bad or not ok_good or caught < 7 else 0)
 
 
 def _add_birth_args(c, time_required=True):
@@ -302,6 +333,12 @@ def main():
     li.add_argument('facts')
     li.add_argument('narrative')
     li.set_defaults(func=cmd_lint)
+    lt = sub.add_parser('lint-text', help='检查要发给用户的聊天回复（追问的回答、报告前的结论段）；合盘的回复传 match.json')
+    lt.add_argument('facts', help='facts.json（合盘传 match.json）')
+    lt.add_argument('file', nargs='?', help='回复文字所在的文件；省略或写 - 时从标准输入读')
+    lt.add_argument('--text', help='直接给出要检查的文字')
+    lt.add_argument('--date', help='回答针对的日期 YYYY-MM-DD（流月、某一天的问题要加）')
+    lt.set_defaults(func=cmd_lint_text)
     r = sub.add_parser('render', help='生成报告（先自动 lint）')
     r.add_argument('facts')
     r.add_argument('narrative', nargs='?')

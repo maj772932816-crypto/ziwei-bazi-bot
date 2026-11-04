@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """生成发布包：dist/ziwei-bazi-report-<版本>.zip、dist/SHA256SUMS.txt，以及填好下载地址和校验值的 dist/SKILL.md。
 
-用法：python3 tools/make_release.py --repo 用户名/仓库名 [--tag v1.1.0]
+用法：python3 tools/make_release.py --repo 用户名/仓库名 [--tag v<版本号>]
 
 压缩包用固定的时间戳和文件顺序生成，同一份代码每次打出来的 SHA256 都一样。
 dist/SKILL.md 是要粘贴给 Grok Bot 的技能文字；压缩包里的 SKILL.md 保留占位符（压缩包不能包含自己的校验值）。

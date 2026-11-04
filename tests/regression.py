@@ -71,7 +71,30 @@ def main():
     if caught < 4:
         bad += 1
         print('合盘检查漏报：只抓到', caught, '处')
-    print(f'回归测试：{len(snaps)} 个案例' + ('全部一致' if not bad else f'，{bad} 处不一致') + '；示例解读检查' + ('通过' if not errs else '未通过') + f'；合盘检查抓到 {caught}/4 处')
+    # 聊天回复检查（1.1.1）：Grok 实测中写错的原句要被抓到，改正后的写法不能误报
+    from zwbz.lint import lint_text
+    a10 = engine.build('1990-05-20', '14:30', '女', city='杭州', years_from=2026, years_count=10)
+    b10 = engine.build('1988-08-08', '08:08', '男', city='北京', dst_adjust=True, years_from=2026, years_count=10)
+    text_cases = [
+        (a10, '2025 到 2035 这十年，两边都指向责任重、压力大，2035 年后倾向转顺。', None, 'error', 1),
+        (a10, '天机化忌入命宫，容易想太多，生年天机自化权就带这个倾向。', '2026-11-03', 'error', 1),
+        (b10, '这十年（约 2018 到 2028）的重心在家庭、房子和文书资产上。', None, 'warn', 1),
+        (b10, '紫微田宅大限（2018–2028）重心在家庭和房子。', None, 'error', 1),
+        (a10, '八字丁丑运（2025–2035）和紫微子女大限（2024–2033）都是压力最重的一段；命宫天机自化权。', None, 'any', 0),
+        (a10, '太阴化权入财帛，倾向主动管钱；天机化忌入命宫。', '2026-11-03', 'any', 0),
+    ]
+    text_ok = 0
+    for f_, t, d, level, want in text_cases:
+        fs = lint_text(f_, t, d)
+        got = len(fs) if level == 'any' else len([x for x in fs if x['level'] == level])
+        if got == want:
+            text_ok += 1
+        else:
+            print('聊天回复检查不符：', t[:30], '期望', want, '实际', got, [x['message'][:60] for x in fs])
+    if text_ok < len(text_cases):
+        bad += 1
+    print(f'回归测试：{len(snaps)} 个案例' + ('全部一致' if not bad else f'，{bad} 处不一致') + '；示例解读检查' + ('通过' if not errs else '未通过')
+          + f'；合盘检查抓到 {caught}/4 处；聊天回复检查 {text_ok}/{len(text_cases)} 条符合')
     sys.exit(1 if bad else 0)
 
 
