@@ -162,7 +162,7 @@ def cmd_render(a):
         print('这张盘的核对没有通过（status=stop），不生成报告。')
         sys.exit(4)
     out = a.output or os.path.join(os.path.dirname(os.path.abspath(a.facts)), {'html': 'report.html', 'md': 'report.md', 'chat': 'chat.txt'}[a.format])
-    text = render_files(a.facts, a.narrative, out, a.format)
+    text = render_files(a.facts, a.narrative, out, a.format, dataset_text=not a.no_dataset_text)
     if a.format == 'chat':
         print(text)
     print('已生成', out)
@@ -345,6 +345,7 @@ def main():
     r.add_argument('-o', '--output')
     r.add_argument('--format', choices=['html', 'md', 'chat'], default='html')
     r.add_argument('--force', action='store_true', help='lint 有错误或核对未通过时仍生成（不建议）')
+    r.add_argument('--no-dataset-text', action='store_true', help='报告里不放 13 维数据集原文（收费服务用：原文含仅限非商业的引文）')
     r.set_defaults(func=cmd_render)
     mo = sub.add_parser('month', help='流月：某一天（默认今天），或一整年')
     mo.add_argument('facts')

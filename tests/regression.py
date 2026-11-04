@@ -93,8 +93,23 @@ def main():
             print('聊天回复检查不符：', t[:30], '期望', want, '实际', got, [x['message'][:60] for x in fs])
     if text_ok < len(text_cases):
         bad += 1
+    # 详版（1.2.0）：宫位语境、宫名、完整性
+    pal_cases = [
+        ({'ziwei': {'palaces': {'夫妻': '天机坐守，想得多。'}}}, 'error', 1),
+        ({'ziwei': {'palaces': {'迁移': '空宫，借对宫命宫的天机天梁坐守。'}}}, 'error', 0),
+        ({'ziwei': {'palaces': {'命宫': '本宫是空宫。', '财务': '无'}}}, 'error', 2),
+        ({'detail': 'full', 'ziwei': {'palaces': {'命宫': '天机天梁同宫。'}}}, 'warn', 4),
+    ]
+    for nar_, level, want in pal_cases:
+        got = len([x for x in lint(a10, nar_) if x['level'] == level and not x['message'].startswith('缺少')])
+        if got == want:
+            text_ok += 1
+        else:
+            bad += 1
+            print('详版检查不符：', nar_, '期望', want, '实际', got)
+    text_cases += pal_cases
     print(f'回归测试：{len(snaps)} 个案例' + ('全部一致' if not bad else f'，{bad} 处不一致') + '；示例解读检查' + ('通过' if not errs else '未通过')
-          + f'；合盘检查抓到 {caught}/4 处；聊天回复检查 {text_ok}/{len(text_cases)} 条符合')
+          + f'；合盘检查抓到 {caught}/4 处；聊天回复和详版检查 {text_ok}/{len(text_cases)} 条符合')
     sys.exit(1 if bad else 0)
 
 

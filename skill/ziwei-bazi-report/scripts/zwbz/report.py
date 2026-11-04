@@ -4,8 +4,10 @@
 """
 import html
 import json
+import os
+import re
 
-from .brief import daxian_rows
+from .brief import daxian_rows, palace_texts
 from .dataset import ATTRIBUTION
 from .ziwei import BR
 
@@ -13,6 +15,8 @@ E = lambda s: html.escape(str(s if s is not None else ''), quote=True)  # noqa: 
 GOOD = ['左辅', '右弼', '文昌', '文曲', '天魁', '天钺', '禄存', '天马']
 BAD = ['擎羊', '陀罗', '火星', '铃星', '地空', '地劫']
 HUA_CLS = {'禄': 'lu', '权': 'quan', '科': 'ke', '忌': 'ji'}
+TOPICS = (('personality', '性格'), ('career', '事业'), ('wealth', '财运'), ('marriage', '感情婚姻'), ('study', '学业考试'), ('health', '健康（传统五行对应）'))
+DIMS = ['命格总览', '性格', '感情', '事业', '财运', '健康', '兄弟', '子女', '迁移', '人际', '田宅', '福德', '父母']
 AGREE_CLS = {'两边一致': 'ok', '高': 'ok', '已核对': 'ver', '中': 'mid', '只有八字': 'mid', '只有紫微': 'mid', '低': 'warn', '有分歧': 'warn'}
 
 CSS = r'''
@@ -101,6 +105,22 @@ td.k { white-space: nowrap; font-weight: 500; } tr.cur td { background: var(--go
 .chkitem small { display: block; color: var(--faint); font-size: 13px; line-height: 1.6; }
 .chkitem:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .tally { font-weight: 500; color: var(--accent); } .foot { color: var(--muted); font-size: 14px; line-height: 1.8; }
+.dcards { display: grid; gap: 12px; } .pcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.dcard { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.dcard.cur { border-color: var(--gold); box-shadow: inset 4px 0 0 var(--gold); }
+.dcard h3 { margin: 0; font-size: 17.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.dcard h3 .sub { font-family: var(--font-body); font-size: 13px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+.dcard .fx { font-size: 13.5px; color: var(--muted); line-height: 1.7; display: grid; gap: 2px; } .dcard .fx b { color: var(--ink); font-weight: 500; }
+.dcard .txt { display: grid; gap: 8px; font-size: 15.5px; line-height: 1.8; }
+.topic { display: grid; gap: 8px; max-width: var(--measure); } .topic h3 { margin: 4px 0 0; }
+details.ds { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0 14px; }
+details.ds summary { cursor: pointer; padding: 10px 0; font-weight: 500; line-height: 1.6; } details.ds summary small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+details.ds[open] summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+details.ds .body { display: grid; gap: 10px; padding-bottom: 14px; font-size: 15px; line-height: 1.8; max-width: var(--measure); }
+details.ds blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--gold); color: var(--muted); }
+details.ds h4 { margin: 8px 0 0; font-size: 15.5px; font-family: var(--font-display); } details.ds ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; }
+details.ds hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
+.dslist { display: grid; gap: 8px; }
 @media (max-width: 860px) {
   .layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .side { top: 0; z-index: 5; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; background: var(--bg); padding-block: 10px;
@@ -177,7 +197,88 @@ def _grid(zw, now_age):
     return f'<div class="pan-wrap"><div class="pan">{"".join(cells)}{center}</div></div>'
 
 
-def render(facts: dict, nar: dict) -> str:
+def _dcard(title, sub, fx, text, cur=False, flags=''):
+    fxh = ''.join(f'<span>{x}</span>' for x in fx if x)
+    return (f'<div class="dcard{" cur" if cur else ""}"><h3>{E(title)} <span class="sub">{E(sub)}</span>{flags}</h3>'
+            + (f'<div class="fx">{fxh}</div>' if fxh else '') + (f'<div class="txt">{_paras(text)}</div>' if text else '') + '</div>')
+
+
+def _palace_fx(zw, p, birth):
+    """一宫的事实（程序生成）：主星、吉煞、杂曜、自化、大限年份。返回 HTML 片段列表和纯文本版。"""
+    names = {s['name']: s for s in p['stars']}
+    maj = [s for s in p['stars'] if s['type'] == 'major']
+    if maj:
+        mj_h = '、'.join(f'{E(s["name"])}（{E(s.get("brightness", ""))}）{_hua(s.get("hua"))}' for s in maj)
+        mj_t = '、'.join(f'{s["name"]}（{s.get("brightness", "")}）' + (f'化{s["hua"]}' if s.get('hua') else '') for s in maj)
+    else:
+        opp = zw['palaces'][(zw['palaces'].index(p) + 6) % 12]
+        om = [s['name'] for s in opp['stars'] if s['type'] == 'major']
+        mj_t = '空宫' + (f'，借对宫{opp["name"]}的' + '、'.join(om) if om else '')
+        mj_h = E(mj_t)
+    good = [n + (f'化{names[n]["hua"]}' if names[n].get('hua') else '') for n in GOOD if n in names]
+    bad = [n for n in BAD if n in names]
+    adj = [s['name'] for s in p['stars'] if s['type'] not in ('major', 'minor')]
+    zh = [f'{z["star"]}自化{z["hua"]}' for z in zw['zihua'] if z['palace'] == p['name']]
+    a, b = p['daxian']
+    yr = f'（{birth + a - 1}–{birth + b - 1}）' if birth else ''
+    parts = [('主星', mj_h, mj_t), ('吉星', E('、'.join(good)), '、'.join(good)), ('煞星', E('、'.join(bad)), '、'.join(bad)),
+             ('杂曜', E('、'.join(adj)), '、'.join(adj)), ('自化', E('、'.join(zh)), '、'.join(zh)), ('大限', E(f'{a}–{b} 岁{yr}'), f'{a}–{b} 岁{yr}')]
+    html_lines = [f'<b>{k}</b> {h}' for k, h, t in parts if t]
+    text = '；'.join(f'{k} {t}' for k, h, t in parts if t)
+    return html_lines, text
+
+
+def _md_inline(t):
+    return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', E(t))
+
+
+def _md_html(lines):
+    out, para, items = [], [], []
+
+    def flush():
+        if para:
+            out.append('<p>' + _md_inline(''.join(para)) + '</p>'); para.clear()
+        if items:
+            out.append('<ul>' + ''.join(f'<li>{_md_inline(x)}</li>' for x in items) + '</ul>'); items.clear()
+    for ln in lines:
+        t = ln.strip()
+        if not t:
+            flush(); continue
+        if t.startswith('#'):
+            flush(); out.append(f'<h4>{_md_inline(t.lstrip("#").strip())}</h4>')
+        elif t.startswith('>'):
+            flush(); out.append(f'<blockquote>{_md_inline(t.lstrip(">").strip())}</blockquote>')
+        elif t in ('---', '***'):
+            flush(); out.append('<hr>')
+        elif re.match(r'^[-*] ', t):
+            if para:
+                flush()
+            items.append(t[2:])
+        else:
+            if items:
+                flush()
+            para.append(t)
+    flush()
+    return ''.join(out)
+
+
+def dataset_sections(md: str) -> list:
+    """facts.dataset.md → [(维度, [行])]。只有 13 个维度名开头的二级标题算新的一维，其余二级标题归前一维。"""
+    secs, cur = [], None
+    for ln in md.splitlines():
+        m = re.match(r'^##\s+(.+?)\s*$', ln)
+        if m and not ln.startswith('###'):
+            name = m.group(1).strip()
+            if name in DIMS:
+                cur = (name, []); secs.append(cur); continue
+            if cur:
+                cur[1].append('### ' + name); continue
+        if cur:
+            cur[1].append(ln)
+    return secs
+
+
+def render(facts: dict, nar: dict, dataset_text: str = None) -> str:
     i, bz, zw = facts['input'], facts['bazi'], facts.get('ziwei')
     nar = nar or {}
     yrs = facts.get('years') or []
@@ -256,9 +357,9 @@ def render(facts: dict, nar: dict) -> str:
     inner += f'<div class="prose">{_paras(nb.get("strength"))}{_paras(nb.get("pattern"))}</div>'
     if nb.get('xiji'):
         inner += _table(['喜忌', '五行', '理由'], [f'<tr><td class="k">{E(x.get("level"))}</td><td>{E(x.get("wuxing"))}</td><td>{E(x.get("why"))}</td></tr>' for x in nb['xiji']])
-    for key, label in (('personality', '性格'), ('career', '事业'), ('wealth', '财运'), ('health', '健康（传统五行对应）')):
+    for key, label in TOPICS:
         if nb.get(key):
-            inner += f'<div class="prose"><p><b>{label}。</b>{E(nb[key])}</p></div>'
+            inner += f'<div class="topic"><h3>{label}</h3>{_paras(nb[key])}</div>'
     if nb.get('relatives'):
         inner += _table(['六亲', '八字里的看法'], [f'<tr><td class="k">{E(x.get("who"))}</td><td>{E(x.get("text"))}</td></tr>' for x in nb['relatives']])
     dnotes = nb.get('dayun', {})
@@ -269,8 +370,19 @@ def render(facts: dict, nar: dict) -> str:
         rel = '；'.join(d.get('relations', [])) or '与原局无明显作用'
         rows.append(f'<tr class="{"cur" if d["pillar"] == cur else ""}"><td class="k">{E(d["pillar"])}{"（当前）" if d["pillar"] == cur else ""}</td>'
                     f'<td>{E(d["start"][:7])} 起，约 {d.get("start_age", d["start_age_xu"])} 岁</td><td>{E(d["stem_god"])} / {E(d["branch_god"])}</td>'
-                    f'<td>{E(rel)}</td><td>{E(dnotes.get(d["pillar"], ""))}</td></tr>')
-    inner += f'<h3>大运（{"顺" if bz["yun"]["forward"] else "逆"}排，约 {bz["yun"]["start_age"]} 岁起运）</h3>' + _table(['大运', '时间', '十神', '与原局', '要点'], rows)
+                    f'<td>{E(rel)}</td></tr>')
+    inner += f'<h3>大运（{"顺" if bz["yun"]["forward"] else "逆"}排，约 {bz["yun"]["start_age"]} 岁起运）</h3>' + _table(['大运', '时间', '十神', '与原局'], rows)
+    cards = []
+    for k, d in enumerate(bz['dayun'][:8]):
+        t = dnotes.get(d['pillar'])
+        if not t:
+            continue
+        end = bz['dayun'][k + 1]['start_year'] if k + 1 < len(bz['dayun']) else d['start_year'] + 10
+        cards.append(_dcard(f'{d["pillar"]}运', f'{d["start_year"]}–{end} · 约 {d.get("start_age", d["start_age_xu"])} 岁起 · {d["stem_god"]}/{d["branch_god"]}',
+                            ['<b>与原局</b> ' + E('；'.join(d.get('relations', [])) or '无明显作用')], t, d['pillar'] == cur,
+                            _pill('当前') if d['pillar'] == cur else ''))
+    if cards:
+        inner += '<h3>大运逐步看</h3><div class="dcards">' + ''.join(cards) + '</div>'
     sec('bazi', '八字分析', inner)
 
     # 紫微
@@ -280,19 +392,36 @@ def render(facts: dict, nar: dict) -> str:
         inner += f'<div class="prose">{"".join(f"<p><b>{lab}</b>{E(nz[k])}</p>" for k, lab in (("ming", "命宫。"), ("shen", "身宫。"), ("sanfang", "三方四正。")) if nz.get(k))}</div>'
         if nz.get('patterns'):
             inner += _table(['格局', '成立情况'], [f'<tr><td class="k">{E(x.get("name"))}</td><td>{E(x.get("status"))}</td></tr>' for x in nz['patterns']])
-        if nz.get('palaces'):
-            inner += _table(['宫位', '要点'], [f'<tr><td class="k">{E(x.get("palace"))}</td><td>{E(x.get("text"))}</td></tr>' for x in nz['palaces']])
         dxn = nz.get('daxian', {})
         rows = []
         birth = i['birth_year_for_age']
-        for r in daxian_rows(zw)[:7]:
+        dcards = []
+        for r in daxian_rows(zw)[:9]:
             a, b = r['range']
             key = f'{a}-{b}'
             is_cur = now_age and a <= now_age <= b
             sh = '，'.join(f"{x['star']}{x['hua']}入{x['palace']}" for x in r['sihua'])
-            rows.append(f'<tr class="{"cur" if is_cur else ""}"><td class="k">{a}–{b}</td><td>{birth + a - 1}–{birth + b - 1}</td><td>{E(r["palace"])}（{E(r["gz"])}）</td><td>{E(sh)}</td><td>{E(dxn.get(key, ""))}</td></tr>')
-        inner += '<h3>大限</h3>' + _table(['虚岁', '年份', '大限宫', '宫干四化', '要点'], rows)
+            rows.append(f'<tr class="{"cur" if is_cur else ""}"><td class="k">{a}–{b}</td><td>{birth + a - 1}–{birth + b - 1}</td><td>{E(r["palace"])}（{E(r["gz"])}）</td><td>{E(sh)}</td></tr>')
+            if dxn.get(key):
+                dcards.append(_dcard(f'{r["palace"]}大限', f'{a}–{b} 岁 · {birth + a - 1}–{birth + b - 1} · {r["gz"]}', ['<b>宫干四化</b> ' + E(sh)],
+                                     dxn[key], bool(is_cur), _pill('当前') if is_cur else ''))
+        inner += '<h3>大限</h3>' + _table(['虚岁', '年份', '大限宫', '宫干四化'], rows)
+        if dcards:
+            inner += '<h3>大限逐个看</h3><div class="dcards">' + ''.join(dcards) + '</div>'
         sec('ziwei', '紫微斗数分析', inner)
+        ptx = palace_texts(nz)
+        pcs = []
+        for p in zw['palaces']:
+            if not ptx.get(p['name']):
+                continue
+            fx, _ = _palace_fx(zw, p, birth)
+            a, b = p['daxian']
+            is_cur = bool(now_age and a <= now_age <= b)
+            flags = (_pill('命宫') if p['is_ming'] else '') + (_pill('身宫') if p['is_shen'] else '') + (_pill('当前大限') if is_cur else '')
+            pcs.append(_dcard(p['name'] if p['name'].endswith('宫') else p['name'] + '宫', p['stem'] + p['branch'], fx, ptx[p['name']], is_cur, flags))
+        if pcs:
+            sec('palaces', '十二宫详解', '<div class="pcards">' + ''.join(pcs) + '</div>',
+                '每宫上面几行是程序排出的星曜、四化和大限年份，下面是逐宫的解读。空宫按传统借对宫主星来看。')
 
     if nar.get('cross'):
         rows = [f'<tr><td class="k">{E(x.get("topic"))}</td><td>{E(x.get("bazi"))}</td><td>{E(x.get("ziwei"))}</td><td>{_pill(x.get("agree"))}</td></tr>' for x in nar['cross']]
@@ -332,8 +461,14 @@ def render(facts: dict, nar: dict) -> str:
     ds = facts.get('dataset')
     if ds and ds.get('dims'):
         rows = [f'<tr><td class="k">{E(d["label"])}</td><td>{E(d["tone"])}</td></tr>' for d in ds['dims']]
-        sec('dataset', '数据集 13 维速览', _table(['维度', '一句话定调'], rows),
-            f'{ATTRIBUTION}。这是第三方现成解读，按时辰直接排盘、亮度用旧表，和上面分析冲突时以上面为准。')
+        inner = _table(['维度', '一句话定调'], rows)
+        secs = dataset_sections(dataset_text) if dataset_text else []
+        if secs:
+            tone = {d['label']: d['tone'] for d in ds['dims']}
+            inner += ('<h3>13 维原文（点开看）</h3><p class="foot">以下是数据集原文，没有改动。原文里引用的倪海厦原话仅限非商业的学习研究。</p><div class="dslist">'
+                      + ''.join(f'<details class="ds"><summary>{E(n)}<small>{E(tone.get(n, ""))}</small></summary><div class="body">{_md_html(lines)}</div></details>' for n, lines in secs)
+                      + '</div>')
+        sec('dataset', '数据集 13 维', inner, f'{ATTRIBUTION}。这是第三方现成解读，按时辰直接排盘、亮度用旧表，和上面分析冲突时以上面为准。')
 
     if nar.get('advice'):
         sec('advice', '建议', '<div class="prose">' + ''.join(f'<p><b>{E(a.get("title"))}：</b>{E(a.get("text"))}</p>' for a in nar['advice']) + '</div>')
@@ -391,16 +526,21 @@ def render_md(facts: dict, nar: dict) -> str:
     if s:
         L.append(f"旺衰：**{nb.get('strength_label') or s['label']}**（五行计分 " + '，'.join(f'{w}{v}' for w, v in s['score'].items()) + f"；生扶 {s['self_vs_other'][0]} 对克泄耗 {s['self_vs_other'][1]}；{s['tiaohou']}）")
     L.append('')
-    for k, lab in (('strength', ''), ('pattern', ''), ('personality', '性格'), ('career', '事业'), ('wealth', '财运'), ('health', '健康（传统五行对应）')):
+    for k, lab in (('strength', ''), ('pattern', '')) + TOPICS:
         if nb.get(k):
-            L += [(f'**{lab}：**' if lab else '') + nb[k], '']
+            L += [(f'### {lab}' if lab else ''), '', nb[k].replace('\n', '\n\n'), '']
     if nb.get('xiji'):
         L += [_md_table(['喜忌', '五行', '理由'], [[x.get('level'), x.get('wuxing'), x.get('why')] for x in nb['xiji']]), '']
     if nb.get('relatives'):
         L += [_md_table(['六亲', '看法'], [[x.get('who'), x.get('text')] for x in nb['relatives']]), '']
     dn = nb.get('dayun', {})
-    L += ['### 大运', '', _md_table(['大运', '起运', '十神', '与原局', '要点'],
-          [[d['pillar'], f"{d['start'][:7]}（约 {d.get('start_age', '')} 岁）", f"{d['stem_god']}/{d['branch_god']}", '；'.join(d.get('relations', [])), dn.get(d['pillar'], '')] for d in bz['dayun'][:8]]), '']
+    dys = bz['dayun']
+    L += ['### 大运', '', _md_table(['大运', '起运', '十神', '与原局'],
+          [[d['pillar'], f"{d['start'][:7]}（约 {d.get('start_age', '')} 岁）", f"{d['stem_god']}/{d['branch_god']}", '；'.join(d.get('relations', []))] for d in dys[:8]]), '']
+    for k, d in enumerate(dys[:8]):
+        if dn.get(d['pillar']):
+            end = dys[k + 1]['start_year'] if k + 1 < len(dys) else d['start_year'] + 10
+            L += [f"#### {d['pillar']}运（{d['start_year']}–{end}，{d['stem_god']}/{d['branch_god']}）", '', dn[d['pillar']].replace('\n', '\n\n'), '']
     if zw:
         nz = nar.get('ziwei', {})
         rows = []
@@ -414,12 +554,22 @@ def render_md(facts: dict, nar: dict) -> str:
                 L += [f'**{lab}：**' + nz[k], '']
         if nz.get('patterns'):
             L += [_md_table(['格局', '成立情况'], [[x.get('name'), x.get('status')] for x in nz['patterns']]), '']
-        if nz.get('palaces'):
-            L += [_md_table(['宫位', '要点'], [[x.get('palace'), x.get('text')] for x in nz['palaces']]), '']
         dxn = nz.get('daxian', {})
-        L += ['### 大限', '', _md_table(['虚岁', '大限宫', '宫干四化', '要点'],
-              [[f"{r['range'][0]}–{r['range'][1]}", f"{r['palace']}（{r['gz']}）", '，'.join(f"{x['star']}{x['hua']}入{x['palace']}" for x in r['sihua']),
-                dxn.get(f"{r['range'][0]}-{r['range'][1]}", '')] for r in daxian_rows(zw)[:7]]), '']
+        by = i['birth_year_for_age']
+        L += ['### 大限', '', _md_table(['虚岁', '年份', '大限宫', '宫干四化'],
+              [[f"{r['range'][0]}–{r['range'][1]}", f"{by + r['range'][0] - 1}–{by + r['range'][1] - 1}", f"{r['palace']}（{r['gz']}）",
+                '，'.join(f"{x['star']}{x['hua']}入{x['palace']}" for x in r['sihua'])] for r in daxian_rows(zw)[:9]]), '']
+        for r in daxian_rows(zw)[:9]:
+            t = dxn.get(f"{r['range'][0]}-{r['range'][1]}")
+            if t:
+                L += [f"#### {r['palace']}大限（{r['range'][0]}–{r['range'][1]} 岁，{by + r['range'][0] - 1}–{by + r['range'][1] - 1}）", '', t.replace('\n', '\n\n'), '']
+        ptx = palace_texts(nz)
+        if any(ptx.get(p['name']) for p in zw['palaces']):
+            L += ['## 十二宫详解', '']
+            for p in zw['palaces']:
+                if ptx.get(p['name']):
+                    _, fx = _palace_fx(zw, p, by)
+                    L += [f"### {p['name']}（{p['stem']}{p['branch']}）", '', f'> {fx}', '', ptx[p['name']].replace('\n', '\n\n'), '']
     if nar.get('cross'):
         L += ['## 交叉印证', '', _md_table(['主题', '八字', '紫微', '一致度'], [[x.get('topic'), x.get('bazi'), x.get('ziwei'), x.get('agree')] for x in nar['cross']]), '']
     if yrs:
@@ -438,7 +588,7 @@ def render_md(facts: dict, nar: dict) -> str:
         L += ['## 回溯核对', '', '照自己的经历勾选，对上的越多，说明出生时间和这张盘越贴合。', ''] + [f"- [ ] {x.get('text')}（依据：{x.get('basis')}）" for x in nar['checklist']] + ['']
     ds = facts.get('dataset')
     if ds and ds.get('dims'):
-        L += ['## 数据集 13 维速览', '', _md_table(['维度', '一句话定调'], [[d['label'], d['tone']] for d in ds['dims']]), '', f'> {ATTRIBUTION}（CC BY 4.0）。', '']
+        L += ['## 数据集 13 维', '', _md_table(['维度', '一句话定调'], [[d['label'], d['tone']] for d in ds['dims']]), '', f'> {ATTRIBUTION}（CC BY 4.0）。原文见 HTML 版报告。', '']
     if nar.get('advice'):
         L += ['## 建议', ''] + [f"- **{a.get('title')}**：{a.get('text')}" for a in nar['advice']] + ['']
     L += ['## 说明', '', '命理是传统文化里的一套解释体系，没有科学证据表明它能预测具体事件。本报告按传统规则推演，仅供参考，不能替代医疗、法律、财务和婚恋方面的专业判断。', '']
@@ -465,9 +615,14 @@ def render_chat(facts: dict, nar: dict) -> str:
     return '\n'.join(L)
 
 
-def render_files(facts_path: str, narrative_path: str, out_path: str, fmt: str = 'html'):
+def render_files(facts_path: str, narrative_path: str, out_path: str, fmt: str = 'html', dataset_text: bool = True):
     facts = json.load(open(facts_path, encoding='utf-8'))
     nar = json.load(open(narrative_path, encoding='utf-8')) if narrative_path else {}
-    text = {'html': render, 'md': render_md, 'chat': render_chat}[fmt](facts, nar)
+    if fmt == 'html':
+        ds_file = os.path.join(os.path.dirname(os.path.abspath(facts_path)), (facts.get('dataset') or {}).get('full_text_file') or 'facts.dataset.md')
+        ds_text = open(ds_file, encoding='utf-8').read() if dataset_text and os.path.exists(ds_file) else None
+        text = render(facts, nar, ds_text)
+    else:
+        text = {'md': render_md, 'chat': render_chat}[fmt](facts, nar)
     open(out_path, 'w', encoding='utf-8').write(text)
     return text

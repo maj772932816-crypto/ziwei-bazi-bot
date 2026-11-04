@@ -3,7 +3,7 @@ name: ziwei-bazi-report
 description: 紫微斗数加八字的排盘、多来源交叉核对、开源 13 维解读数据集查询，并生成可以微信转发的命格报告；也能看流年流月、合盘、出生时间不确定时帮忙定时辰。用户给出出生日期时间、性别、出生地，想排盘、看八字或紫微、问运势、合盘时使用。
 ---
 
-# 紫微斗数 + 八字 命格报告（技能版本 1.1.1）
+# 紫微斗数 + 八字 命格报告（技能版本 1.2.0）
 
 排盘、核对、查数据、检查解读、出报告都由程序完成；你负责问清信息、确认疑点、写解读文字。**不要凭记忆排盘，也不要改程序算出的干支、星曜、四化。**
 
@@ -15,7 +15,7 @@ description: 紫微斗数加八字的排盘、多来源交叉核对、开源 13 
 bash ~/zwbz/ziwei-bazi-report/scripts/zwbz.sh --version
 ```
 
-输出 `zwbz 1.1.1` 就跳到第 1 步。没有输出、报错，或者版本不同，就安装（会覆盖旧版本，不影响 `~/zwbz/work/` 里的数据）：
+输出 `zwbz 1.2.0` 就跳到第 1 步。没有输出、报错，或者版本不同，就安装（会覆盖旧版本，不影响 `~/zwbz/work/` 里的数据）：
 
 ```bash
 python3 - <<'PY'
@@ -62,6 +62,13 @@ Z run --date 1990-05-20 --time 14:30 --gender 女 --city 杭州 --out ~/zwbz/wor
 
 读 `~/zwbz/work/<编号>/brief.txt`，这是唯一的事实来源。需要数据集某一维的全文时，读同目录的 `facts.dataset.md`。把解读写进 `~/zwbz/work/<编号>/narrative.json`，结构见 `~/zwbz/ziwei-bazi-report/references/narrative-schema.md`，完整写法见 `analysis-guide.md`，范例见 `example-narrative.json`。
 
+**默认写详版**（用户说只要简版、看个大概时，才只写结论、八字和紫微的概述）。详版在 narrative.json 里加 `"detail": "full"`，并写满：
+- 十二宫逐宫：`ziwei.palaces` 写成 `{"命宫": "…", "兄弟": "…", …}`，12 个宫都写，每宫 80–200 字。
+- 八字分项：`bazi` 里的 personality、career、wealth、marriage（感情婚姻）、study（学业考试）、health，每项 150–300 字，可以用 `\n` 分段。
+- 前 8 步大运（`bazi.dayun`）、前 8 个大限（`ziwei.daxian`），每条 60–150 字。**不用写年份**，报告里由程序显示。
+
+详版很长，可以分几次写进 narrative.json，每写完一部分跑一次 lint。写之前先看 `example-narrative.json`，它就是一份完整的详版。
+
 核心规则：
 
 1. **只用 brief 里的事实。** 星曜在哪宫、亮度、四化、干支、合冲刑害都以 brief 为准；brief 没有的就写「不确定」。
@@ -83,7 +90,7 @@ Z render ~/zwbz/work/<编号>/facts.json ~/zwbz/work/<编号>/narrative.json
 Z render ~/zwbz/work/<编号>/facts.json ~/zwbz/work/<编号>/narrative.json --format chat
 ```
 
-`lint` 会把解读里提到的四化（含自化的来源）、星曜落宫、亮度、年份干支、大运大限（含年份段属于哪一边）、四柱、命宫、身宫、五行局逐一与排盘结果核对，并查恐吓或绝对化的写法。**有「错误」必须改到 0 再出报告**；`render` 会自动先检查，有错误就不生成。`render` 默认输出 `report.html`（单文件、离线可开、可转发微信）；`--format md` 输出 Markdown，`--format chat` 输出聊天短摘要。
+`lint` 会把解读里提到的四化（含自化的来源）、星曜落宫、亮度、年份干支、大运大限（含年份段属于哪一边）、四柱、命宫、身宫、五行局逐一与排盘结果核对，并查恐吓或绝对化的写法。**有「错误」必须改到 0 再出报告**；`render` 会自动先检查，有错误就不生成。`render` 默认输出 `report.html`（单文件、离线可开、可转发微信），详版包括十二宫详解、大运大限逐步看，以及 13 维数据集原文（附录里点开看）；`--format md` 输出 Markdown，`--format chat` 输出聊天短摘要。
 
 ## 5. 回复用户
 
@@ -114,7 +121,7 @@ Z lint-text ~/zwbz/work/<合盘编号>/match.json ~/zwbz/work/<合盘编号>/rep
 
 - 用户的出生信息只写进 `~/zwbz/work/`（发文件用的副本在 `~/zwbz/out/`），**不要写进长期记忆**，不要发到公开渠道。用户要求删除时立刻 purge。
 - 不推销开运物品，不建议改名、换风水或为改运花钱；不替用户联系第三方。
-- 报告自动附带免责说明和数据集来源说明（CC BY 4.0 要求署名），不要删。数据集正文引用的倪海厦原话仅限非商业用途：如果用于收费服务，就不要转引这些原话。
+- 报告自动附带免责说明和数据集来源说明（CC BY 4.0 要求署名），不要删。数据集正文引用的倪海厦原话仅限非商业用途：如果用于收费服务，`render` 时加 `--no-dataset-text`，报告里就不放数据集原文；解读里也不要转引这些原话。
 - 怀疑程序算错时，跑 `Z selftest`，并把结果告诉用户；不要自己改数字。
 
 ## 口径

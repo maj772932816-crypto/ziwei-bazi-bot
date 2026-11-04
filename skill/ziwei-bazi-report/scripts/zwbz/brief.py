@@ -2,6 +2,26 @@
 from .ziwei import SIHUA, palace_of
 
 
+PALACE_ALIAS = {'交友': '仆役', '奴仆': '仆役', '事业': '官禄', '命': '命宫'}
+PALACE_NAMES = ['命宫', '兄弟', '夫妻', '子女', '财帛', '疾厄', '迁移', '仆役', '官禄', '田宅', '福德', '父母']
+
+
+def palace_texts(nz: dict) -> dict:
+    """narrative 里的 ziwei.palaces（列表或字典）整理成 {宫名: 文字}；认不出的宫名放在 '?' 下面。"""
+    raw = (nz or {}).get('palaces') or {}
+    items = raw.items() if isinstance(raw, dict) else [(x.get('palace', ''), x.get('text', '')) for x in raw if isinstance(x, dict)]
+    out = {}
+    for k, v in items:
+        key = str(k).strip()
+        key = PALACE_ALIAS.get(key[:2], key[:2]) if key[:2] != '命宫' else '命宫'
+        if key not in PALACE_NAMES:
+            out.setdefault('?', []).append(str(k))
+            continue
+        if v:
+            out[key] = (out[key] + '\n' + v) if key in out else v
+    return out
+
+
 def daxian_rows(zw: dict) -> list:
     rows = []
     for p in sorted(zw['palaces'], key=lambda x: x['daxian'][0]):
@@ -63,22 +83,27 @@ def brief(f: dict) -> str:
                  f"{'得令' if s['de_ling'] else '不得令'}；参考标签：{s['label']}；{s['tiaohou']}")
     y = bz['yun']
     L.append(f"  大运{'顺' if y['forward'] else '逆'}排，起运约 {y['start_age']} 岁（{y['start_date']}）：")
-    for d in bz['dayun'][:8]:
-        L.append(f"    {d['pillar']}（{d['start'][:7]} 起，约 {d.get('start_age', d['start_age_xu'])} 岁，{d['stem_god']}/{d['branch_god']}）："
+    dys = bz['dayun']
+    for k, d in enumerate(dys[:8]):
+        end = dys[k + 1]['start_year'] if k + 1 < len(dys) else d['start_year'] + 10
+        L.append(f"    {d['pillar']}（{d['start_year']}–{end} 年，{d['start'][:7]} 起，约 {d.get('start_age', d['start_age_xu'])} 岁，{d['stem_god']}/{d['branch_god']}）："
                  + ('；'.join(d.get('relations', [])) or '与原局无明显作用'))
     if zw:
         L.append('【紫微十二宫】（从命宫起逆排）')
         for p in zw['palaces']:
             tag = ('[命]' if p['is_ming'] else '') + ('[身]' if p['is_shen'] else '')
-            mj = _stars(p, 'major') or '空宫'
+            opp = zw['palaces'][(zw['palaces'].index(p) + 6) % 12]
+            mj = _stars(p, 'major') or (f"空宫（借对宫{opp['name']} {_stars(opp, 'major')}）" if _stars(opp, 'major') else '空宫')
             L.append(f"  {p['name']}{tag} {p['stem']}{p['branch']}：主星 {mj}；吉煞 {_stars(p, 'minor') or '无'}；杂曜 {_stars(p, 'adj')}；"
                      f"大限 {p['daxian'][0]}–{p['daxian'][1]}；{p['长生']}")
         L.append('  生年四化：' + '，'.join(f"{s}化{k}在{palace_of(zw, s)}" for k, s in zw['sihua'].items()))
         L.append('  宫干自化：' + ('，'.join(f"{z['palace']}{z['star']}自化{z['hua']}" for z in zw['zihua']) or '无'))
         L.append('  对宫化入：' + ('，'.join(f"{z['from']}化{z['hua']}入{z['to']}（{z['star']}）" for z in zw['chongru']) or '无'))
         L.append('【大限】')
+        by = f['input'].get('birth_year_for_age')
         for r in daxian_rows(zw):
-            L.append(f"  {r['range'][0]}–{r['range'][1]} 岁 {r['palace']}（{r['gz']}）：" + '，'.join(f"{x['star']}化{x['hua']}入{x['palace']}" for x in r['sihua']))
+            yr = f"（{by + r['range'][0] - 1}–{by + r['range'][1] - 1} 年）" if by else ''
+            L.append(f"  {r['range'][0]}–{r['range'][1]} 岁{yr} {r['palace']}（{r['gz']}）：" + '，'.join(f"{x['star']}化{x['hua']}入{x['palace']}" for x in r['sihua']))
     if f.get('years'):
         L.append('【逐年】')
         for r in f['years']:

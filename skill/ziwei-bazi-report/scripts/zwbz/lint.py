@@ -5,7 +5,7 @@ error：与排盘结果矛盾（必须改）；warn：可能有问题或写法�
 """
 import re
 
-from .brief import daxian_rows
+from .brief import PALACE_NAMES, daxian_rows, palace_texts
 from .ziwei import MAJOR, MINOR, SIHUA
 
 ST, BR = '甲乙丙丁戊己庚辛壬癸', '子丑寅卯辰巳午未申酉戌亥'
@@ -32,6 +32,7 @@ DX_KW = re.compile(r'大限')
 BOTH_KW = re.compile(r'两边|两套|八字和紫微|紫微和八字|八字、紫微|紫微、八字|八字与紫微|紫微与八字')
 ATT_BEFORE = re.compile(rf'({SYS_KW})\s*[（(：:]?\s*(?:约|大约|大概)?\s*$')
 ATT_AFTER = re.compile(rf'^\s*年?\s*(?:的|是|为|走|行|属于|走的是|这步|这一步)?\s*(?:八字|紫微)?\s*(?:的)?\s*({SYS_KW})')
+TOPIC_KEYS = [('personality', '性格'), ('career', '事业'), ('wealth', '财运'), ('marriage', '感情婚姻'), ('study', '学业考试'), ('health', '健康')]
 LABELS = {'偏旺', '偏弱', '身旺', '身弱', '中和', '中和略偏旺', '中和略偏弱', '从强', '从弱', '从旺', '从财', '从杀', '从儿', '化气'}
 
 
@@ -234,6 +235,27 @@ def _check_clause(F, path: str, c: str, add):
             add('warn', path, c, f'「{w}」太绝对，改成「倾向」「可能」「传统上认为」')
 
 
+def _check_palace(F, pname: str, text: str, add):
+    """十二宫详解：第 P 宫的文字里，「本宫是 X」「X 坐守」的 X 必须在本宫（写明借对宫时可以是对宫主星）；有主星的宫不能写成空宫。"""
+    pals = F.zw['palaces']
+    pal = next(x for x in pals if x['name'] == pname)
+    majors = [x['name'] for x in pal['stars'] if x['type'] == 'major']
+    opp = pals[(pals.index(pal) + 6) % 12]
+    omaj = [x['name'] for x in opp['stars'] if x['type'] == 'major']
+    path = f'ziwei.palaces.{pname}'
+    desc = '、'.join(majors) if majors else f'空宫（对宫{opp["name"]}是' + ('、'.join(omaj) or '空宫') + '）'
+    for c in _clauses(text):
+        borrow = '借' in c or '对宫' in c
+        hits = [m.group(1) for m in re.finditer(rf'本宫(?:的)?(?:主星)?(?:是|为|有|坐)?(?:着)?({MAJOR_RE})', c)]
+        hits += [m.group(1) for m in re.finditer(rf'({MAJOR_RE})(?:星)?(?:化[禄权科忌])?(?:坐守|独坐|同坐|坐镇|入坐|坐于本宫|在本宫)', c)]
+        for star in dict.fromkeys(hits):
+            if star in majors or (borrow and star in omaj):
+                continue
+            add('error', path, c, f'「{star}」不在{pname}；{pname}的主星：{desc}')
+        if majors and (re.search(rf'(?:本宫|{pname[:2]}宫?)(?:是|为)?空宫', c) or c.strip().startswith('空宫')):
+            add('error', path, c, f'{pname}有主星 {"、".join(majors)}，不是空宫')
+
+
 def _check_ranges(F, path: str, ctx: str, add):
     """年份段：写明属于八字大运还是紫微大限；两边起止不同，不能合成一段。"""
     found = [m for m in YR_RANGE.finditer(ctx) if int(m.group(2)) > int(m.group(1))]
@@ -304,6 +326,25 @@ def lint(facts: dict, nar: dict) -> list:
         else:
             add('warn', 'bazi.strength_label', lab, f"与程序参考标签「{F.bz['strength']['label']}」不同，确认 strength 正文写了理由")
 
+    ptx = palace_texts(nar.get('ziwei') or {}) if F.zw else {}
+    for bad in ptx.pop('?', []):
+        add('error', 'ziwei.palaces', bad, f'认不出「{bad}」是哪个宫；宫名用：' + '、'.join(PALACE_NAMES) + '（交友同仆役，事业同官禄）')
+    for pname, text in ptx.items():
+        _check_palace(F, pname, text, add)
+    if nar.get('detail') == 'full':  # 详版要写全
+        if F.zw:
+            miss = [n for n in PALACE_NAMES if n not in ptx]
+            if miss:
+                add('warn', 'ziwei.palaces', '', '详版要写满十二宫，还缺：' + '、'.join(miss))
+            n_dx = len([k for k in (nar.get('ziwei') or {}).get('daxian') or {} if k in F.daxian])
+            if n_dx < 8:
+                add('warn', 'ziwei.daxian', '', f'详版要写前 8 个大限，现在有 {n_dx} 个')
+        miss = [lab for k, lab in TOPIC_KEYS if not (nar.get('bazi') or {}).get(k)]
+        if miss:
+            add('warn', 'bazi', '', '详版八字分项还缺：' + '、'.join(miss))
+        n_dy = len([k for k in (nar.get('bazi') or {}).get('dayun') or {} if k in F.dayun])
+        if n_dy < min(8, len(F.dayun)):
+            add('warn', 'bazi.dayun', '', f'详版要写前 8 步大运，现在有 {n_dy} 步')
     for path, text in _texts(nar):
         for c in _clauses(text):
             _check_clause(F, path, c, add)
